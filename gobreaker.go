@@ -46,8 +46,7 @@ func (s State) String() string {
 // Counts ignores the results of the requests sent before clearing.
 //
 // Counts 保存请求数量及其成功/失败
-// 熔断 清除内部Counts
-// 状态的变化或闭合状态的间隔
+// 在断路器的状态发生改变或在闭合状态的时候, 断路器清除内部计数
 // 计数忽略清除前发送的请求的结果
 type Counts struct {
 	Requests             uint32
@@ -133,7 +132,7 @@ func (c *Counts) clear() {
 // Timeout 在断开状态时, 每隔timeout时间后切换到半开状态
 // 如果Timeout==0, 默认设置为60s
 //
-// ReadyToTrip 在关闭状态时, 请求出现错误 调用这个方法
+// ReadyToTrip 在关闭状态时, 请求出现错误 调用这个方法, 判断熔断是否生效的钩子函数
 // 返回true 会切换至断开状态
 // 不设置为使用默认方法: 策略 当连续失败次数超过5时, 默认ReadyToTrip返回true, 切换至断开状态
 // 一般在此设置策略
@@ -154,7 +153,7 @@ type Settings struct {
 //
 // CircuitBreaker是一种状态机, 用于防止发送可能失败的请求.
 // generation 状态每变化一次，该值增加一次, 如果设置了interval，则在闭合状态时，每隔interval时，也增加一次
-// expiry interval timeout 不同状态下的间隔时间
+// expiry interval timeout 不同状态下的到期间隔时间
 type CircuitBreaker struct {
 	name          string
 	maxRequests   uint32
@@ -352,11 +351,12 @@ func (cb *CircuitBreaker) afterRequest(before uint64, success bool) {
 	now := time.Now()
 	state, generation := cb.currentState(now)
 	// 只有关闭时清理 或者 断开->半开 generation 会 != before
+	// 已经在断开状态
 	if generation != before {
 		return
 	}
 
-	// 当状态为半开时
+	// 当状态为闭合或者半断开时
 	// 成功恢复闭合
 	// 失败继续断开
 	if success {
@@ -393,7 +393,7 @@ func (cb *CircuitBreaker) onFailure(state State, now time.Time) {
 }
 
 // 当前状态
-// 关闭状态: expiry有赋值 并且间隔时间到了
+// 闭合状态: expiry时间过期
 // 调用NewGeneration 清零 并且 设置下一次间隔时间
 //
 // 断开状态: timeout时间到了 设置成半开状态
